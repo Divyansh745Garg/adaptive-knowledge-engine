@@ -1,0 +1,27 @@
+spring:
+  application:
+    name: adaptive-knowledge
+
+  threads:
+    virtual:
+      enabled: true
+
+    # PostgreSQL Configuration
+  datasource:
+      url: jdbc:postgresql://localhost:5432/knowledge_engine
+      username: postgres
+      password: your_password
+      driver-class-name: org.postgresql.Driver
+
+  jpa:
+      hibernate:
+        ddl-auto: update # Automatically creates our CDM tables on startup
+      show-sql: false
+
+#  # LangChain4j Configuration
+#  langchain4j:
+#    open-ai:
+#      embedding-model:
+#        api-key: ${OPENAI_API_KEY} # Pulls from your environment variables
+#        model-name: text-embedding-3-small
+
