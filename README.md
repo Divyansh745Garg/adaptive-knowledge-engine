@@ -1,482 +1,324 @@
-# Adaptive Knowledge Change Engine
+# Adaptive Knowledge Engine
 
-> A production-grade Retrieval-Augmented Generation (RAG) platform designed for **continuously evolving enterprise knowledge**. Unlike traditional RAG systems that assume documents are static, this engine detects content mutations, performs incremental indexing, preserves document history, and enables version-aware retrieval using a Canonical Document Model (CDM).
-
----
-
-# The Engineering Problem
-
-Most Retrieval-Augmented Generation (RAG) tutorials demonstrate a simple workflow:
-
-1. Upload a few PDFs.
-2. Generate embeddings.
-3. Store them in a vector database.
-4. Query the knowledge base.
-
-While this works for demonstrations, it breaks down in production.
-
-Enterprise knowledge is never static.
-
-Examples include:
-
-- HR policies
-- Government regulations
-- Banking compliance documents
-- Insurance policies
-- Product documentation
-- API references
-- Standard Operating Procedures (SOPs)
-
-These documents evolve continuously.
-
-If a single paragraph changes inside a 200-page PDF, most traditional RAG pipelines:
-
-- Re-parse the entire document
-- Re-generate embeddings for every chunk
-- Re-upload everything to the vector database
-- Overwrite previous knowledge
-- Lose historical context
-
-This approach is computationally expensive, increases API costs, wastes embedding computation, and completely removes the ability to answer questions like:
-
-- *What changed between Policy Version 3 and Version 4?*
-- *Which compliance rule was active in January 2025?*
-- *How has this government scheme evolved over time?*
+An enterprise-grade, non-blocking asynchronous document ingestion, retrieval, and Query Transformation RAG (Retrieval-Augmented Generation) system. Built with **Spring Boot 3**, **Java 21 Virtual Threads (Project Loom)**, **LangChain4j**, and **PostgreSQL**, this engine supports multi-modal PDF parsing, vectorization, token-aware query transformation, and intelligent answer generation.
 
 ---
 
-# The Solution
-
-Adaptive Knowledge Change Engine introduces a **Canonical Document Model (CDM)** that separates business documents from the retrieval pipeline.
-
-Instead of treating every upload as a brand-new document, the engine identifies whether:
-
-- the document is completely new,
-- unchanged,
-- or an updated version of an existing document.
-
-Only changed content is processed.
-
-Previous versions remain available for auditing and historical reasoning.
-
----
-
-# Core Features
-
-## Incremental Indexing
-
-Every uploaded document is assigned an MD5 checksum.
-
-Before any expensive processing begins, the checksum is compared against the latest active version.
-
-If the checksum matches:
-
-- PDF parsing is skipped
-- Chunking is skipped
-- Embedding generation is skipped
-- Vector database writes are skipped
-
-Result:
-
-- Zero unnecessary compute
-- Zero embedding cost
-- Instant response
-
----
-
-## Version-Aware Document Lifecycle
-
-Instead of deleting documents, the engine maintains a complete version history.
-
-Document lifecycle:
-
-```
-ACTIVE
-   │
-New upload detected
-   │
-   ▼
-SUPERSEDED
-   │
-New Version becomes ACTIVE
-```
-
-Every version remains queryable.
-
-This enables:
-
-- historical retrieval
-- compliance auditing
-- temporal reasoning
-- document rollback
-
----
-
-## Asynchronous Ingestion using Java 21 Virtual Threads
-
-Large PDF parsing and embedding generation are expensive operations.
-
-Instead of blocking incoming HTTP requests, the ingestion pipeline executes inside Java Virtual Threads (Project Loom).
-
-Benefits:
-
-- Massive concurrency
-- Lightweight threads
-- Better scalability
-- Tomcat thread pool never blocks
-- Faster response times
-
-The API immediately returns:
-
-```
-HTTP 202 Accepted
-```
-
-while processing continues in the background.
-
----
-
-## Canonical Document Model (CDM)
-
-Every uploaded document is represented using a normalized metadata model.
-
-Example:
+# Architecture
 
 ```text
-Document
-├── Title
-├── Domain
-├── Type
-├── Version
-├── Status
-├── MD5 Checksum
-├── Metadata (JSONB)
-└── Vector References
-```
-
-The retrieval layer is completely decoupled from business-specific schemas.
-
----
-
-## Flexible Metadata using PostgreSQL JSONB
-
-Enterprise documents often contain different metadata.
-
-Examples:
-
-HR
-
-```json
-{
-  "department": "HR",
-  "country": "India"
-}
-```
-
-Government
-
-```json
-{
-  "scheme": "PMAY",
-  "state": "Rajasthan"
-}
-```
-
-Healthcare
-
-```json
-{
-  "hospital": "AIIMS",
-  "category": "Emergency"
-}
-```
-
-Instead of modifying SQL schemas for every new domain, metadata is stored inside PostgreSQL JSONB columns using Hibernate 6.
-
-This allows the system to support multiple industries without schema migrations.
-
----
-
-# System Architecture
-
-```
-                  PDF Upload
-                      │
-                      ▼
-              REST Controller
-                      │
-                      ▼
-        Java 21 Virtual Thread
-                      │
-                      ▼
-          PDF Parsing (PDFBox)
-                      │
-                      ▼
-          Chunk Generation
-                      │
-                      ▼
-         MD5 Change Detection
-          ┌───────────┴───────────┐
-          │                       │
-    Unchanged                Changed
-          │                       │
-          ▼                       ▼
-   Skip Processing        Generate Embeddings
-                                  │
-                                  ▼
-                      Vector Store (In-Memory /
-                      Pinecone / Milvus)
-                                  │
-                                  ▼
-                     PostgreSQL Metadata Registry
+                 ┌─────────────────────────────────────────┐
+                 │               Client App                │
+                 └────────────────────┬────────────────────┘
+                                      │
+                    POST /upload      │  POST /query
+                                      ▼
+ ┌────────────────────────────────────────────────────────────────────────┐
+ │                     Spring Boot API (Java 21 Loom)                     │
+ └───────────────────┬────────────────────────────────┬───────────────────┘
+                     │                                │
+        Async Ingestion (Virtual Thread)      Query Transformation
+                     │                                │
+                     ▼                                ▼
+          ┌─────────────────────┐          ┌─────────────────────┐
+          │   Apache PDFBox     │          │  Token-Aware Query  │
+          │  Parsing & Chunking │          │ Expansion & Rewrite │
+          └──────────┬──────────┘          └──────────┬──────────┘
+                     │                                │
+                     ▼                                ▼
+          ┌─────────────────────┐          ┌─────────────────────┐
+          │   Local Embedder    │          │    Vector Search    │
+          │(all-minilm-l6-v2)   │          │     & RAG Engine    │
+          └──────────┬──────────┘          └──────────┬──────────┘
+                     │                                │
+                     ▼                                ▼
+          ┌─────────────────────┐          ┌─────────────────────┐
+          │ PostgreSQL Database │          │ Intelligent Answer  │
+          │   (CDM Storage)     │          │    Generation       │
+          └─────────────────────┘          └─────────────────────┘
 ```
 
 ---
 
-# Technology Stack
+# Features
 
-| Layer | Technology |
-|---------|------------|
+- **Asynchronous Document Ingestion**
+  - Uses Java 21 Virtual Threads (`@EnableAsync`) for non-blocking background processing.
+  - Upload requests immediately return **HTTP 202 Accepted** with a tracking ID while parsing and embedding continue asynchronously.
+
+- **Canonical Document Model (CDM)**
+  - Normalized relational schema consisting of:
+    - `documents`
+    - `document_versions`
+    - `chunks`
+  - Supports document metadata, lifecycle management, and version history.
+
+- **Local Embedding Pipeline**
+  - Generates embeddings locally using:
+    - `all-minilm-l6-v2`
+    - DJL
+    - ONNX Runtime
+  - Eliminates dependency on external embedding APIs.
+
+- **Token-Aware Query Transformation**
+  - Removes conversational filler.
+  - Expands abbreviations.
+  - Normalizes user queries before vector search.
+  - Produces cleaner semantic retrieval.
+
+- **Persistent Storage**
+  - PostgreSQL stores:
+    - Documents
+    - Chunk metadata
+    - Embeddings metadata
+    - Version history
+
+- **Enterprise Document Support**
+  - Supports PDF uploads up to **50 MB**.
+
+---
+
+# Tech Stack
+
+| Category | Technology |
+|----------|------------|
 | Language | Java 21 |
-| Framework | Spring Boot 3.5.x |
-| Concurrency | Java Virtual Threads (Project Loom) |
-| AI Framework | LangChain4j |
-| ORM | Spring Data JPA + Hibernate 6 |
+| Framework | Spring Boot 3.5.5 |
+| AI Framework | LangChain4j 0.33.0 |
 | Database | PostgreSQL |
-| Metadata Storage | JSONB |
-| Embeddings | All-MiniLM-L6-v2 |
-| Vector Store | In-Memory (Pinecone/Milvus Ready) |
-| PDF Parsing | Apache PDFBox |
+| ORM | Spring Data JPA + Hibernate 6 |
+| Embedding Model | all-minilm-l6-v2 (ONNX Runtime) |
+| PDF Parsing | Apache PDFBox 3.0.1 |
+| Connection Pool | HikariCP |
 | Build Tool | Maven |
-| Containerization | Docker |
 
 ---
 
-# Project Structure
+# Prerequisites
 
-```
-src
-├── controller
-├── service
-├── repository
-├── entity
-├── dto
-├── configuration
-├── ingestion
-├── parser
-├── embedding
-├── vectorstore
-└── utils
-```
+- Java 21+
+- PostgreSQL
+- Maven
 
 ---
 
-# Getting Started
+# Database Setup
 
-## 1. Clone the Repository
+Create the database:
 
-```bash
-git clone https://github.com/Divyansh745Garg/adaptive-knowledge.git
-
-cd adaptive-knowledge
+```sql
+CREATE DATABASE knowledge_engine;
 ```
 
 ---
 
-## 2. Start PostgreSQL
+# Configuration
 
-```bash
-docker compose up -d
-```
-
-Verify:
-
-```bash
-docker ps
-```
-
----
-
-## 3. Configure Environment
-
-Edit:
-
-```
-application.yml
-```
-
-Example:
+Update your `application.yml`.
 
 ```yaml
 spring:
-  datasource:
-    url: jdbc:postgresql://localhost:5432/adaptive_knowledge
-    username: YOUR_USERNAME
-    password: YOUR_PASSWORD
-
-  jpa:
-    hibernate:
-      ddl-auto: update
+  application:
+    name: adaptive-knowledge
 
   threads:
     virtual:
       enabled: true
+
+  servlet:
+    multipart:
+      max-file-size: 50MB
+      max-request-size: 50MB
+
+  datasource:
+    url: jdbc:postgresql://localhost:5432/knowledge_engine
+    username: postgres
+    password: your_postgres_password
+    driver-class-name: org.postgresql.Driver
+
+  jpa:
+    hibernate:
+      ddl-auto: update
+    show-sql: false
 ```
+
+> **Note:** The application sets the JVM timezone to UTC (`TimeZone.setDefault(TimeZone.getTimeZone("UTC"))`) to ensure consistent timestamp handling and PostgreSQL compatibility.
 
 ---
 
-## 4. Start the Application
+# Running the Application
+
+## Clone the repository
+
+```bash
+git clone https://github.com/YOUR_USERNAME/adaptive-knowledge-engine.git
+cd adaptive-knowledge-engine
+```
+
+## Build
+
+```bash
+./mvnw clean compile
+```
+
+## Run
 
 ```bash
 ./mvnw spring-boot:run
 ```
 
-or
-
-```bash
-mvn spring-boot:run
-```
-
-The application starts on
+The application starts on:
 
 ```
 http://localhost:8080
 ```
 
+Hibernate automatically creates the required database tables during startup.
+
 ---
 
-# REST API
+# 📡 API Reference
 
-## Upload Document
+## 1. Upload Document
+
+Uploads a document for asynchronous parsing, chunking, embedding, and persistence.
+
+### Endpoint
 
 ```
 POST /api/v1/ingestion/upload
 ```
 
-Example:
+### Content Type
+
+```
+multipart/form-data
+```
+
+### Example
 
 ```bash
-curl -X POST http://localhost:8080/api/v1/ingestion/upload \
-  -F "file=@policy.pdf" \
-  -F "title=Company Security Policy" \
+curl -i -X POST http://localhost:8080/api/v1/ingestion/upload \
+  -F "file=@/path/to/document.pdf" \
+  -F "title=Enterprise Security Policy" \
   -F "domain=Security" \
   -F "type=Policy"
 ```
 
-Response
+### Response (202 Accepted)
 
 ```json
 {
-  "trackingId": "4dcbd83a-9b0b-4b73-89ea",
-  "status": "ACCEPTED"
+  "status": "QUEUED",
+  "trackingId": "ab0def0a-df01-4130-81a8-570ec85c1cd1",
+  "message": "Document submitted for background transformation and vectorization."
 }
 ```
 
 ---
 
-# Mutation Test
+## 2. Query Knowledge Base
 
-## Step 1
+Performs:
 
-Upload
+- Query transformation
+- Semantic retrieval
+- Answer synthesis
 
-```
-policy.pdf
-```
-
-Result
+### Endpoint
 
 ```
-Version 1
+POST /api/v1/query/search
+```
 
-Status: ACTIVE
+### Content Type
+
+```
+application/json
+```
+
+### Example
+
+```bash
+curl -X POST http://localhost:8080/api/v1/query/search \
+-H "Content-Type: application/json" \
+-d '{
+  "query":"What are the updated password complexity requirements in the security policy?",
+  "domain":"Security"
+}'
+```
+
+### Response (200 OK)
+
+```json
+{
+  "transformedQuery": "security policy password complexity minimum length symbol rules",
+  "answer": "According to Section 4.2 of the Enterprise Security Policy, passwords must be a minimum of 16 characters and contain at least one special character, one number, and one uppercase letter.",
+  "sources": [
+    {
+      "documentTitle": "Enterprise Security Policy",
+      "chunkId": "c1f729e2-8921-4f10-b99d-192a2a0951bd",
+      "relevanceScore": 0.94
+    }
+  ]
+}
 ```
 
 ---
 
-## Step 2
+# Database Schema
 
-Upload the exact same file again.
+### documents
 
-Console output:
+Stores the primary document metadata.
 
-```
-Document checksum matched.
+Fields include:
 
-Skipping ingestion.
-
-Embedding Cost: $0
-```
-
-No new vectors are generated.
+- Document title
+- Domain
+- Active version
+- Creation metadata
 
 ---
 
-## Step 3
+### document_versions
 
-Modify one sentence inside the PDF.
+Maintains document history.
 
-Upload again.
+Tracks:
 
-The engine detects:
-
-```
-Checksum changed
-```
-
-Actions performed:
-
-- Previous Version marked SUPERSEDED
-- Old vectors removed
-- New vectors generated
-- New Version registered
-- Metadata updated
+- ACTIVE versions
+- ARCHIVED versions
+- Version lifecycle
 
 ---
 
-# PostgreSQL Audit Trail
+### chunks
 
-| Title | Version | Status | Checksum |
-|--------|----------|---------|----------|
-| Leave Policy | 1 | SUPERSEDED | 9e107d9d372bb682... |
-| Leave Policy | 2 | ACTIVE | 4b227777d4dd1fc6... |
+Stores parsed text chunks generated during ingestion.
 
----
+Contains:
 
-# Future Enhancements
-
-- Pinecone Integration
-- Milvus Support
-- Weaviate Support
-- Qdrant Support
-- Semantic Chunking
-- Hybrid Search (BM25 + Vector Search)
-- Document Diff Viewer
-- Version Comparison API
-- Scheduled Background Synchronization
-- Kafka-based Ingestion Pipeline
-- Multi-Tenant Knowledge Bases
-- OAuth2 / JWT Authentication
-- OpenTelemetry Tracing
-- Kubernetes Deployment
+- Chunk sequence
+- Chunk text
+- Metadata
+- Parent document mapping
 
 ---
 
-# Why This Project?
+# Highlights
 
-This project goes beyond a traditional RAG chatbot.
-
-It demonstrates production-oriented engineering concepts including:
-
-- Incremental document indexing
-- Version-aware knowledge management
-- Asynchronous ingestion pipelines
 - Java 21 Virtual Threads
-- Flexible JSONB-based metadata storage
-- Canonical document modeling
-- Cost-aware embedding generation
-- Enterprise-ready document lifecycle management
-
-The architecture is designed to scale from small internal knowledge bases to large enterprise documentation systems while minimizing compute costs and preserving complete historical context.
+- Fully asynchronous ingestion
+- Local ONNX embedding pipeline
+- Token-aware query transformation
+- PostgreSQL-backed Canonical Document Model
+- LangChain4j integration
+- Enterprise-ready PDF ingestion
+- Modular Spring Boot architecture
 
 ---
+
+## 📄 License
+
+This project is intended for educational and demonstration purposes.
